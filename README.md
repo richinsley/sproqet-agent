@@ -2,22 +2,20 @@
 
 A lean peer-to-peer multiplexed binary protocol, rebuilt from scratch in idiomatic Rust.
 
-Two dependencies, one primitive: a 12-byte wire protocol with deterministic variant serialization, fragmented-stream reassembly, bounded-blocking backpressure, and native support for multidimensional arrays (video frames, tensors) as first-class citizens.
+Two dependencies, one primitive: a 12-byte wire protocol with deterministic variant serialization, fragmented-stream reassembly, bounded-blocking backpressure, and native support for multidimensional arrays as first-class citizens.
 
 ---
 
-## Origin
+Sproqet is a small, opinionated point-to-point transport for multiplexed binary messages over any byte stream. It keeps the core narrow on purpose: **1:1 links, many logical channels, and backpressure that actually flows end-to-end.**
 
-Sproqet started in 2016 as a personal experiment in lean P2P signalling — the kind of small, fast, opinionated control plane you'd want next to a media pipeline. It went through a tangled C++ prototype phase, then sat idle for years. This is the lean rewrite: **1:1 P2P multiplexing over any byte transport, with backpressure that actually flows end-to-end.**
-
-It is intentionally small. No HELO, no ACKs, no keepalives, no mesh routing. The `route_link_id` field is reserved on the wire and always zero — if you want mesh, add it on top.
+It is intentionally small. There is no built-in connection negotiation, peer discovery, keepalive layer, or multi-hop routing. The `route_link_id` field is reserved on the wire and always zero.
 
 ## What's in the box
 
 - **12-byte wire header** (little-endian, packed) — magic + flags + channel_id + data_size + route_link_id
-- **13-type [`SproqetVariant`](src/variant.rs)** — bool, int/uint 32/64, double, string, buffer, array, string-map, uint-map, and `SproqetNDArray` (shape + dtype + data) for media pipelines
+- **13-type [`SproqetVariant`](src/variant.rs)** — bool, int/uint 32/64, double, string, buffer, array, string-map, uint-map, and `SproqetNDArray` (shape + dtype + data)
 - **Multiplexed channels** — one transport, many logical streams, thread-safe sends from many threads
-- **MTU-chunked frames** (1400 B default) — a 6 MB HD frame is just 4,443 little packets to the receiver
+- **MTU-chunked frames** (1400 B default) — large payloads are split into small packets and reassembled on the receiver
 - **Deterministic serialization** — `BTreeMap` internally means two equal variants produce byte-identical output
 - **Bounded backpressure** — per-channel 512-packet FIFO using `std::sync::mpsc::sync_channel`; senders block naturally when receivers can't keep up
 - **Transport-agnostic** — `SproqetRead` / `SproqetWrite` traits; built-in impls for `TcpStream` and `UnixStream`
@@ -28,7 +26,7 @@ It is intentionally small. No HELO, no ACKs, no keepalives, no mesh routing. The
 - Connection setup / teardown negotiation (bring your own handshake)
 - Reconnection, keepalives, heartbeats
 - Multi-hop routing, mesh topology, service discovery
-- Encryption (use TLS/noise on top, or route over SRT)
+- Encryption (use TLS, Noise, or another secure transport underneath or around it)
 - Schema validation (variants are untyped on the wire; agree on shape out-of-band)
 
 ## Quick start
@@ -67,7 +65,7 @@ loop {
 }
 ```
 
-See [`examples/tcp_echo.rs`](examples/tcp_echo.rs) for a full ping-pong, and [`examples/ndarray_pipeline.rs`](examples/ndarray_pipeline.rs) for a multidimensional-array (HD frame) pass-through.
+See [`examples/tcp_echo.rs`](examples/tcp_echo.rs) for a full ping-pong, and [`examples/ndarray_pipeline.rs`](examples/ndarray_pipeline.rs) for a multidimensional-array pass-through.
 
 ## Wire protocol at a glance
 
@@ -115,11 +113,11 @@ No tokio, no byteorder, no serde, no crossbeam. Just `std` and a macro crate.
 
 ## Status
 
-Core is done and tested. The five classical robustness tests (fragmentation reassembly, multiplexing isolation under concurrent senders, deserializer bounds, backpressure, and HD-frame NDArray pass-through) all pass in ~0.2 seconds. Next steps: `pydagger` integration for out-of-process media pipelines.
+Core is done and tested. The five classical robustness tests (fragmentation reassembly, multiplexing isolation under concurrent senders, deserializer bounds, backpressure, and NDArray pass-through) all pass in ~0.2 seconds. Next steps: higher-level integrations, wrapper APIs, and real-world adoption.
 
 ## Acknowledgments
 
-Developed collaboratively with **Claude** (Anthropic) and **Gemini** (Google) in April 2026. The protocol design is from a 2016 personal project of mine; the FIFO soundness work, the disciplined 2-dependency scope, and the final integrated implementation came out of an interactive back-and-forth between the two assistants.
+Developed in close collaboration with AI assistants during the April 2026 rewrite. The protocol design, FIFO soundness work, disciplined 2-dependency scope, and final integrated implementation all benefited from that interactive back-and-forth.
 
 ## License
 
