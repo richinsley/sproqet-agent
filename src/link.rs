@@ -178,24 +178,20 @@ impl SproqetLink {
         running: Arc<AtomicBool>,
         channels: Arc<Mutex<HashMap<u32, Arc<SproqetChannel>>>>,
     ) {
-        let mut header_buf = [0u8; HEADER_SIZE];
         while running.load(Ordering::Relaxed) {
-            if Self::read_exactly(&mut *reader, &mut header_buf, &running).is_err() {
-                break;
-            }
-
-            let header = SproqetPacketHeader::from_bytes(&header_buf);
-            if header.magic != SPROQET_MAGIC {
-                continue;
-            }
-            if header.frame_type() != FrameType::Data as u8 {
-                continue;
-            }
+            let header = match Self::read_header(&mut *reader, &running) {
+                Ok(header) => header,
+                Err(_) => break,
+            };
 
             let size = header.data_size as usize;
             let mut payload = vec![0u8; size];
             if size > 0 && Self::read_exactly(&mut *reader, &mut payload, &running).is_err() {
                 break;
+            }
+
+            if header.frame_type() != FrameType::Data as u8 {
+                continue;
             }
 
             let delim = header.delimiter();
@@ -213,6 +209,23 @@ impl SproqetLink {
 
             channel.push_frame(&payload, is_start, is_stop);
         }
+    }
+
+    fn read_header(
+        reader: &mut dyn SproqetRead,
+        running: &AtomicBool,
+    ) -> Result<SproqetPacketHeader, SproqetError> {
+        let mut header_buf = [0u8; HEADER_SIZE];
+
+        loop {
+            Self::read_exactly(reader, &mut header_buf[..1], running)?;
+            if header_buf[0] == SPROQET_MAGIC {
+                break;
+            }
+        }
+
+        Self::read_exactly(reader, &mut header_buf[1..], running)?;
+        Ok(SproqetPacketHeader::from_bytes(&header_buf))
     }
 
     fn read_exactly(

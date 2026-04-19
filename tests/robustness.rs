@@ -11,7 +11,11 @@ use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use sproqet::{SproqetError, SproqetLink, SproqetNDArray, SproqetRead, SproqetVariant, SproqetWrite};
+use sproqet::{
+    FrameType, PacketDelimiter, SproqetError, SproqetLink, SproqetNDArray, SproqetRead,
+    SproqetVariant, SproqetWrite, SPROQET_MAGIC,
+};
+use sproqet::wire_protocol::SproqetPacketHeader;
 
 // ── In-memory pipe with intentional 16–128 byte fragmentation ────────
 
@@ -27,6 +31,8 @@ struct FragmentedPipeReader {
 struct FragmentedPipeWriter {
     buffer: Arc<Mutex<SharedBuffer>>,
 }
+
+struct SinkWriter;
 
 fn make_fragmented_pipe() -> (FragmentedPipeReader, FragmentedPipeWriter) {
     let buf = Arc::new(Mutex::new(SharedBuffer {
@@ -74,6 +80,12 @@ impl SproqetWrite for FragmentedPipeWriter {
     }
 }
 
+impl SproqetWrite for SinkWriter {
+    fn io_write(&mut self, buf: &[u8]) -> Result<usize, std::io::Error> {
+        Ok(buf.len())
+    }
+}
+
 fn make_link_pair() -> (Arc<SproqetLink>, Arc<SproqetLink>) {
     let (r_ab, w_ab) = make_fragmented_pipe();
     let (r_ba, w_ba) = make_fragmented_pipe();
@@ -83,6 +95,13 @@ fn make_link_pair() -> (Arc<SproqetLink>, Arc<SproqetLink>) {
     link_a.start();
     link_b.start();
     (link_a, link_b)
+}
+
+fn make_receive_only_link() -> (Arc<SproqetLink>, FragmentedPipeWriter) {
+    let (reader, writer) = make_fragmented_pipe();
+    let link = Arc::new(SproqetLink::new(Box::new(reader), Box::new(SinkWriter)));
+    link.start();
+    (link, writer)
 }
 
 // ── Test 1: stream fragmentation reassembly ──────────────────────────
@@ -194,6 +213,83 @@ fn test_variant_safety() {
         SproqetVariant::deserialize(&bad),
         Err(SproqetError::UnknownTypeId(0xFF))
     ));
+}
+
+#[test]
+fn test_header_resync_after_garbage_byte() {
+    let (link, mut writer) = make_receive_only_link();
+
+    writer.io_write(&[0x00]).unwrap();
+
+    let payload = vec![0x08, 0x2A, 0x00, 0x00, 0x00];
+    let header = SproqetPacketHeader::new(
+        PacketDelimiter::Whole,
+        FrameType::Data,
+        7,
+        payload.len() as u16,
+    );
+    writer.io_write(&header.to_bytes()).unwrap();
+    writer.io_write(&payload).unwrap();
+
+    let chan = link.get_channel(7);
+    let mut received = None;
+    for _ in 0..200 {
+        if let Some(Ok(v)) = chan.receive_variant() {
+            received = Some(v);
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    match received.expect("did not resync and receive variant") {
+        SproqetVariant::Uint32(v) => assert_eq!(v, 42),
+        other => panic!("expected Uint32(42), got {other:?}"),
+    }
+
+    link.stop();
+}
+
+#[test]
+fn test_unknown_frame_type_payload_is_skipped() {
+    let (link, mut writer) = make_receive_only_link();
+
+    let unknown_payload = [0xAA, 0xBB, 0xCC];
+    let unknown_header = SproqetPacketHeader {
+        magic: SPROQET_MAGIC,
+        flags: ((PacketDelimiter::Whole as u8) << 5) | 0x1F,
+        channel_id: 9,
+        data_size: unknown_payload.len() as u16,
+        route_link_id: 0,
+    };
+    writer.io_write(&unknown_header.to_bytes()).unwrap();
+    writer.io_write(&unknown_payload).unwrap();
+
+    let payload = vec![0x08, 0x63, 0x00, 0x00, 0x00];
+    let header = SproqetPacketHeader::new(
+        PacketDelimiter::Whole,
+        FrameType::Data,
+        9,
+        payload.len() as u16,
+    );
+    writer.io_write(&header.to_bytes()).unwrap();
+    writer.io_write(&payload).unwrap();
+
+    let chan = link.get_channel(9);
+    let mut received = None;
+    for _ in 0..200 {
+        if let Some(Ok(v)) = chan.receive_variant() {
+            received = Some(v);
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    match received.expect("did not skip unknown frame and receive next variant") {
+        SproqetVariant::Uint32(v) => assert_eq!(v, 99),
+        other => panic!("expected Uint32(99), got {other:?}"),
+    }
+
+    link.stop();
 }
 
 // ── Test 4: backpressure (sender + receiver concurrent) ──────────────
