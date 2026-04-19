@@ -1,0 +1,26 @@
+[package]
+name = "sproqet"
+version = "0.1.0"
+edition = "2021"
+authors = ["Rich Insley <richinsley@gmail.com>"]
+license = "MIT"
+description = "Lean P2P multiplexed binary protocol with NDArray pass-through for media pipelines."
+repository = "https://github.com/richinsley/sproqet-agent"
+documentation = "https://docs.rs/sproqet"
+readme = "README.md"
+keywords = ["p2p", "protocol", "multiplex", "lockless", "ndarray"]
+categories = ["network-programming", "encoding", "data-structures"]
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+rand = "0.8"
+
+[[example]]
+name = "tcp_echo"
+path = "examples/tcp_echo.rs"
+
+[[example]]
+name = "ndarray_pipeline"
+path = "examples/ndarray_pipeline.rs"
